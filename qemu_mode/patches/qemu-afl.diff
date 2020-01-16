@@ -1,0 +1,99 @@
+diff --git a/accel/tcg/cpu-exec.c b/accel/tcg/cpu-exec.c
+index 81153e7..5895dfa 100644
+--- a/accel/tcg/cpu-exec.c
++++ b/accel/tcg/cpu-exec.c
+@@ -37,6 +37,8 @@
+ #include "sysemu/cpus.h"
+ #include "sysemu/replay.h"
+ 
++#include "../patches/afl-qemu-cpu-inl.h"
++
+ /* -icount align implementation. */
+ 
+ typedef struct SyncClocks {
+@@ -145,6 +147,8 @@ static inline tcg_target_ulong cpu_tb_exec(CPUState *cpu, TranslationBlock *itb)
+     int tb_exit;
+     uint8_t *tb_ptr = itb->tc.ptr;
+ 
++    AFL_QEMU_CPU_SNIPPET2;
++
+     qemu_log_mask_and_addr(CPU_LOG_EXEC, itb->pc,
+                            "Trace %d: %p ["
+                            TARGET_FMT_lx "/" TARGET_FMT_lx "/%#x] %s\n",
+@@ -402,6 +406,7 @@ static inline TranslationBlock *tb_find(CPUState *cpu,
+         if (likely(tb == NULL)) {
+             /* if no translated code available, then translate it now */
+             tb = tb_gen_code(cpu, pc, cs_base, flags, cf_mask);
++            AFL_QEMU_CPU_SNIPPET1;
+         }
+ 
+         mmap_unlock();
+diff --git a/linux-user/elfload.c b/linux-user/elfload.c
+index c77ed1b..4e24489 100644
+--- a/linux-user/elfload.c
++++ b/linux-user/elfload.c
+@@ -20,6 +20,8 @@
+ 
+ #define ELF_OSABI   ELFOSABI_SYSV
+ 
++extern abi_ulong afl_entry_point, afl_start_code, afl_end_code;
++
+ /* from personality.h */
+ 
+ /*
+@@ -2231,6 +2233,8 @@ static void load_elf_image(const char *image_name, int image_fd,
+     info->brk = 0;
+     info->elf_flags = ehdr->e_flags;
+ 
++    if (!afl_entry_point) afl_entry_point = info->entry;
++
+     for (i = 0; i < ehdr->e_phnum; i++) {
+         struct elf_phdr *eppnt = phdr + i;
+         if (eppnt->p_type == PT_LOAD) {
+@@ -2264,9 +2268,11 @@ static void load_elf_image(const char *image_name, int image_fd,
+             if (elf_prot & PROT_EXEC) {
+                 if (vaddr < info->start_code) {
+                     info->start_code = vaddr;
++                    if (!afl_start_code) afl_start_code = vaddr;
+                 }
+                 if (vaddr_ef > info->end_code) {
+                     info->end_code = vaddr_ef;
++                    if (!afl_end_code) afl_end_code = vaddr_ef;
+                 }
+             }
+             if (elf_prot & PROT_WRITE) {
+diff --git a/linux-user/syscall.c b/linux-user/syscall.c
+index 643b883..e31d103 100644
+--- a/linux-user/syscall.c
++++ b/linux-user/syscall.c
+@@ -112,6 +112,8 @@
+ 
+ #include "qemu.h"
+ 
++extern unsigned int afl_forksrv_pid;
++
+ #ifndef CLONE_IO
+ #define CLONE_IO                0x80000000      /* Clone io context */
+ #endif
+@@ -11970,8 +11972,19 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
+         break;
+ 
+     case TARGET_NR_tgkill:
+-        ret = get_errno(safe_tgkill((int)arg1, (int)arg2,
+-                        target_to_host_signal(arg3)));
++        {
++          int pid  = (int)arg1,
++              tgid = (int)arg2,
++              sig  = (int)arg3;
++
++          /* Not entirely sure if the below is correct for all architectures. */
++
++          if(afl_forksrv_pid && afl_forksrv_pid == pid && sig == SIGABRT)
++              pid = tgid = getpid();
++
++          ret = get_errno(safe_tgkill(pid, tgid, target_to_host_signal(sig)));
++
++        }
+         break;
+ 
+ #ifdef TARGET_NR_set_robust_list

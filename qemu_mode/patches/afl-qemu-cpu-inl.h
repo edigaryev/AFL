@@ -104,9 +104,6 @@ struct afl_tsl {
 
 /* Some forward decls: */
 
-TranslationBlock *tb_htable_lookup(CPUState*, target_ulong, target_ulong, uint32_t);
-static inline TranslationBlock *tb_find(CPUState*, TranslationBlock*, int);
-
 /*************************
  * ACTUAL IMPLEMENTATION *
  *************************/
@@ -296,7 +293,7 @@ static void afl_wait_tsl(CPUState *cpu, int fd) {
     if (read(fd, &t, sizeof(struct afl_tsl)) != sizeof(struct afl_tsl))
       break;
 
-    tb = tb_htable_lookup(cpu, t.pc, t.cs_base, t.flags);
+    tb = tb_htable_lookup(cpu, t.pc, t.cs_base, t.flags, 0);
 
     if(!tb) {
       mmap_lock();
